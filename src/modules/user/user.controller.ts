@@ -8,30 +8,59 @@ import {
 } from "./user.validation";
 import bcrypt from "bcrypt";
 
+// Common select for user public profile
+const userPublicSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  image: true,
+  bio: true,
+  travelInterests: true,
+  visitedCountries: true,
+  currentLocation: true,
+  gallery: true,
+  ratingAverage: true,
+  ratingCount: true,
+  subscriptionStatus: true,
+  subscriptionExpiresAt: true,
+  isBlocked: true
+};
+
+// GET /api/users/me
+export const getMe = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json(fail("Unauthorized"));
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: userPublicSelect
+    });
+
+    if (!user) {
+      return res.status(404).json(fail("User not found"));
+    }
+
+    return res.json(ok(user));
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/users/:id
-export const getUserProfile = async (req: Request, res: Response, next: NextFunction) => {
+export const getUserProfile = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     const { id } = req.params;
 
     const user = await prisma.user.findUnique({
       where: { id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        image: true,
-        bio: true,
-        travelInterests: true,
-        visitedCountries: true,
-        currentLocation: true,
-        gallery: true,
-        ratingAverage: true,
-        ratingCount: true,
-        subscriptionStatus: true,
-        subscriptionExpiresAt: true,
-        isBlocked: true
-      }
+      select: userPublicSelect
     });
 
     if (!user) return res.status(404).json(fail("User not found"));
@@ -43,7 +72,11 @@ export const getUserProfile = async (req: Request, res: Response, next: NextFunc
 };
 
 // PATCH /api/users/:id (self or admin)
-export const updateProfile = async (req: Request, res: Response, next: NextFunction) => {
+export const updateProfile = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     const { id } = req.params;
     if (!req.user || (req.user.id !== id && req.user.role !== "ADMIN")) {
@@ -60,23 +93,7 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
     const user = await prisma.user.update({
       where: { id },
       data,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        image: true,
-        bio: true,
-        travelInterests: true,
-        visitedCountries: true,
-        currentLocation: true,
-        gallery: true,
-        ratingAverage: true,
-        ratingCount: true,
-        subscriptionStatus: true,
-        subscriptionExpiresAt: true,
-        isBlocked: true
-      }
+      select: userPublicSelect
     });
 
     return res.json(ok(user, "Profile updated"));
@@ -86,7 +103,11 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
 };
 
 // PATCH /api/users/:id/password
-export const updatePassword = async (req: Request, res: Response, next: NextFunction) => {
+export const updatePassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     const { id } = req.params;
     if (!req.user || req.user.id !== id) {
@@ -118,7 +139,11 @@ export const updatePassword = async (req: Request, res: Response, next: NextFunc
 };
 
 // PATCH /api/users/:id/admin (admin can set moderator, block user)
-export const updateUserAdmin = async (req: Request, res: Response, next: NextFunction) => {
+export const updateUserAdmin = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     if (!req.user || req.user.role !== "ADMIN") {
       return res.status(403).json(fail("Forbidden"));
