@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+  MODERATOR
+}
+
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  EXPIRED
+}
+
+model User {
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
+  name                  String
+  email                 String              @unique
+  passwordHash          String
+  role                  Role                @default(USER)
+  isBlocked             Boolean             @default(false)
+
+  image                 String?
+  bio                   String?
+  travelInterests       String[]            @default([])
+  visitedCountries      String[]            @default([])
+  currentLocation       String?
+  gallery               String[]            @default([])
+
+  ratingCount           Int                 @default(0)
+  ratingAverage         Float               @default(0)
+
+  subscriptionStatus    SubscriptionStatus  @default(NONE)
+  subscriptionExpiresAt DateTime?
+  stripeCustomerId      String?
+
+  otpHash               String?
+  otpExpiresAt          DateTime?
+
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
