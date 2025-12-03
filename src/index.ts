@@ -6,8 +6,9 @@ app.listen(env.PORT, () => {
   console.log(`Server running on http://localhost:${env.PORT}`);
 });
 
-// This converts Express app to a handler compatible with Vercel
+// Vercel Node function that forwards everything to your Express app
 export default function handler(req: VercelRequest, res: VercelResponse) {
-  // @ts-ignore
-  return app(req, res);
+  // Express expects (req, res)
+  // Type cast to any to avoid TS complaints
+  return (app as any)(req, res);
 }
