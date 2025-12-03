@@ -7,7 +7,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "postinstall": "prisma generate"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
   },
   "keywords": [],
   "author": "",
@@ -36,6 +40,7 @@
     "@types/morgan": "^1.9.10",
     "@types/node": "^24.10.1",
     "@types/nodemailer": "^7.0.4",
+    "@vercel/node": "^5.5.14",
     "prisma": "6.19.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
