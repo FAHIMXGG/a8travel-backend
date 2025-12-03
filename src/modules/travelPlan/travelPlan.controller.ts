@@ -1,0 +1,538 @@
+import { Request, Response, NextFunction } from "express";
+import { prisma } from "../../config/prisma";
+import { ok, fail } from "../../utils/apiResponse";
+import {
+  createTravelPlanSchema,
+  reviewSchema,
+  updateTravelPlanStatusSchema
+} from "./travelPlan.validation";
+
+// Helper: derive auto status based on dates + max participants
+const deriveStatus = (plan: any) => {
+  const now = new Date();
+
+  // manual override stays if closed or canceled
+  if (plan.status === "CANCELED" || plan.status === "CLOSED") return plan.status;
+
+  if (plan.maxParticipants && plan.participantsCount >= plan.maxParticipants) {
+    return "FULL";
+  }
+
+  if (now < plan.startDate) return "OPEN";
+  if (now >= plan.startDate && now <= plan.endDate) return "ONGOING";
+  return "ENDED";
+};
+
+// POST /api/travel-plans
+export const createTravelPlan = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const parsed = createTravelPlanSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(fail("Validation error", parsed.error.format()));
+    }
+
+    const data = parsed.data;
+
+    const startDate = new Date(data.startDate);
+    const endDate = new Date(data.endDate);
+
+    if (startDate >= endDate) {
+      return res.status(400).json(fail("Start date must be before end date"));
+    }
+
+    const plan = await prisma.travelPlan.create({
+      data: {
+        hostId: req.user.id,
+        title: data.title,
+        destinationCountry: data.destinationCountry,
+        destinationCity: data.destinationCity,
+        startDate,
+        endDate,
+        budgetMin: data.budgetMin,
+        budgetMax: data.budgetMax,
+        travelType: data.travelType,
+        description: data.description,
+        groupChatLink: data.groupChatLink,
+        contact: data.contact,
+        images: data.images ?? [],
+        tags: data.tags ?? [],
+        isPublic: data.isPublic ?? true,
+        maxParticipants: data.maxParticipants
+      }
+    });
+
+    const status = deriveStatus(plan);
+
+    return res.status(201).json(ok({ ...plan, status }, "Travel plan created"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/travel-plans  (list all, optional filters later)
+// GET /api/travel-plans  (list all with pagination)
+export const getAllTravelPlans = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { destination, fromDate, toDate, tags, page = "1", limit = "10" } = req.query;
+
+    const pageNum = Math.max(parseInt(page as string, 10), 1);
+    const limitNum = Math.max(parseInt(limit as string, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {
+      isPublic: true
+    };
+
+    if (destination && typeof destination === "string") {
+      where.OR = [
+        { destinationCountry: { contains: destination, mode: "insensitive" } },
+        { destinationCity: { contains: destination, mode: "insensitive" } }
+      ];
+    }
+
+    if (fromDate && typeof fromDate === "string") {
+      const from = new Date(fromDate);
+      where.startDate = { gte: from };
+    }
+
+    if (toDate && typeof toDate === "string") {
+      const to = new Date(toDate);
+      where.endDate = { lte: to };
+    }
+
+    if (tags && typeof tags === "string") {
+      const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        where.tags = { hasSome: tagList };
+      }
+    }
+
+    const [total, plans] = await Promise.all([
+      prisma.travelPlan.count({ where }),
+      prisma.travelPlan.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { startDate: "asc" }
+      })
+    ]);
+
+    const result = plans.map((plan) => ({
+      ...plan,
+      status: deriveStatus(plan)
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+
+// GET /api/travel-plans/match?destination=&fromDate=&toDate=&tags=
+// GET /api/travel-plans/match  (search + pagination)
+export const matchTravelPlans = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { destination, fromDate, toDate, tags, page = "1", limit = "10" } = req.query;
+
+    const pageNum = Math.max(parseInt(page as string, 10), 1);
+    const limitNum = Math.max(parseInt(limit as string, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {
+      isPublic: true
+    };
+
+    if (destination && typeof destination === "string") {
+      where.OR = [
+        { destinationCountry: { contains: destination, mode: "insensitive" } },
+        { destinationCity: { contains: destination, mode: "insensitive" } }
+      ];
+    }
+
+    if (fromDate && typeof fromDate === "string") {
+      const from = new Date(fromDate);
+      where.startDate = { gte: from };
+    }
+
+    if (toDate && typeof toDate === "string") {
+      const to = new Date(toDate);
+      where.endDate = { lte: to };
+    }
+
+    if (tags && typeof tags === "string") {
+      const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        where.tags = { hasSome: tagList };
+      }
+    }
+
+    const [total, plans] = await Promise.all([
+      prisma.travelPlan.count({ where }),
+      prisma.travelPlan.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { startDate: "asc" }
+      })
+    ]);
+
+    const result = plans.map((plan) => ({
+      ...plan,
+      status: deriveStatus(plan)
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      }, "Matched travel plans")
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+
+// GET /api/travel-plans/:id
+export const getTravelPlanById = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { id } = req.params;
+
+    const plan = await prisma.travelPlan.findUnique({
+      where: { id }
+    });
+
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    const status = deriveStatus(plan);
+
+    return res.json(ok({ ...plan, status }));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PATCH /api/travel-plans/:id/status  (host manual change)
+export const updateTravelPlanStatus = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id } = req.params;
+    const parsed = updateTravelPlanStatusSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(fail("Validation error", parsed.error.format()));
+    }
+
+    const plan = await prisma.travelPlan.findUnique({ where: { id } });
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    if (plan.hostId !== req.user.id) {
+      return res.status(403).json(fail("Only host can change status"));
+    }
+
+    const updated = await prisma.travelPlan.update({
+      where: { id },
+      data: { status: parsed.data.status }
+    });
+
+    const status = deriveStatus(updated);
+
+    return res.json(ok({ ...updated, status }, "Status updated"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/travel-plans/:id/join
+export const joinTravelPlan = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const plan = await prisma.travelPlan.findUnique({
+      where: { id }
+    });
+
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    const status = deriveStatus(plan);
+    if (status !== "OPEN" && status !== "ONGOING") {
+      return res.status(400).json(fail("You cannot join this plan at this time"));
+    }
+
+    if (plan.hostId === userId) {
+      return res.status(400).json(fail("Host cannot join their own plan"));
+    }
+
+    const existing = await prisma.travelPlanParticipant.findUnique({
+      where: { userId_planId: { userId, planId: id } }
+    });
+
+    if (existing) {
+      return res.status(400).json(fail("You already joined this plan"));
+    }
+
+    // check max participants
+    if (plan.maxParticipants && plan.participantsCount >= plan.maxParticipants) {
+      return res.status(400).json(fail("This plan is full"));
+    }
+
+    await prisma.travelPlanParticipant.create({
+      data: {
+        userId,
+        planId: id
+      }
+    });
+
+    await prisma.travelPlan.update({
+      where: { id },
+      data: {
+        participantsCount: { increment: 1 }
+      }
+    });
+
+    // add to user travel history
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        travelHistory: {
+          push: id
+        }
+      }
+    });
+
+    return res.json(ok(null, "Joined travel plan"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/travel-plans/:id/participants  (host only)
+export const getPlanParticipants = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const plan = await prisma.travelPlan.findUnique({ where: { id } });
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    if (plan.hostId !== userId) {
+      return res.status(403).json(fail("Only host can view participants"));
+    }
+
+    const participants = await prisma.travelPlanParticipant.findMany({
+      where: { planId: id }
+    });
+
+    // You can later join with user info on frontend, or we can fetch basic user data:
+    const userIds = participants.map((p) => p.userId);
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, name: true, image: true }
+    });
+
+    return res.json(
+      ok({
+        count: participants.length,
+        users
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/travel-plans/:id/reviews
+export const createOrUpdateReview = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const plan = await prisma.travelPlan.findUnique({
+      where: { id }
+    });
+
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    const status = deriveStatus(plan);
+    if (status !== "ENDED") {
+      return res
+        .status(400)
+        .json(fail("You can only review a trip after it is completed"));
+    }
+
+    // must have joined the plan
+    const joined = await prisma.travelPlanParticipant.findUnique({
+      where: { userId_planId: { userId, planId: id } }
+    });
+
+    if (!joined) {
+      return res.status(400).json(fail("You did not join this plan"));
+    }
+
+    if (plan.hostId === userId) {
+      return res.status(400).json(fail("Host cannot review their own plan"));
+    }
+
+    const parsed = reviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(fail("Validation error", parsed.error.format()));
+    }
+
+    const { rating, comment } = parsed.data;
+
+    const existing = await prisma.travelPlanReview.findUnique({
+      where: {
+        planId_reviewerId: {
+          planId: id,
+          reviewerId: userId
+        }
+      }
+    });
+
+    let review;
+    if (existing) {
+      review = await prisma.travelPlanReview.update({
+        where: { id: existing.id },
+        data: {
+          rating,
+          comment
+        }
+      });
+    } else {
+      review = await prisma.travelPlanReview.create({
+        data: {
+          planId: id,
+          hostId: plan.hostId,
+          reviewerId: userId,
+          rating,
+          comment
+        }
+      });
+    }
+
+    // recalc host rating
+    const stats = await prisma.travelPlanReview.aggregate({
+      where: { hostId: plan.hostId },
+      _avg: { rating: true },
+      _count: { rating: true }
+    });
+
+    await prisma.user.update({
+      where: { id: plan.hostId },
+      data: {
+        ratingAverage: stats._avg.rating ?? 0,
+        ratingCount: stats._count.rating
+      }
+    });
+
+    return res.json(ok(review, "Review saved"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// DELETE /api/travel-plans/:id/reviews/:reviewId
+export const deleteReview = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id, reviewId } = req.params;
+    const userId = req.user.id;
+
+    const review = await prisma.travelPlanReview.findUnique({
+      where: { id: reviewId }
+    });
+
+    if (!review || review.planId !== id) {
+      return res.status(404).json(fail("Review not found"));
+    }
+
+    if (review.reviewerId !== userId) {
+      return res.status(403).json(fail("You can only delete your own review"));
+    }
+
+    await prisma.travelPlanReview.delete({
+      where: { id: reviewId }
+    });
+
+    // recalc host rating
+    const stats = await prisma.travelPlanReview.aggregate({
+      where: { hostId: review.hostId },
+      _avg: { rating: true },
+      _count: { rating: true }
+    });
+
+    await prisma.user.update({
+      where: { id: review.hostId },
+      data: {
+        ratingAverage: stats._avg.rating ?? 0,
+        ratingCount: stats._count.rating
+      }
+    });
+
+    return res.json(ok(null, "Review deleted"));
+  } catch (err) {
+    next(err);
+  }
+};

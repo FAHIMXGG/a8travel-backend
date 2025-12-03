@@ -19,6 +19,21 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
+enum TravelType {
+  SOLO
+  FAMILY
+  FRIENDS
+}
+
+enum TravelPlanStatus {
+  OPEN
+  ONGOING
+  ENDED
+  CLOSED
+  CANCELED
+  FULL
+}
+
 model User {
   id                    String              @id @default(auto()) @map("_id") @db.ObjectId
   name                  String
@@ -44,6 +59,62 @@ model User {
   otpHash               String?
   otpExpiresAt          DateTime?
 
+  // Travel history: IDs of joined travel plans
+  travelHistory         String[]            @default([])
+
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
+}
+
+model TravelPlan {
+  id                 String           @id @default(auto()) @map("_id") @db.ObjectId
+  hostId             String           @db.ObjectId
+  title              String
+  destinationCountry String?
+  destinationCity    String?
+  startDate          DateTime
+  endDate            DateTime
+  budgetMin          Int?
+  budgetMax          Int?
+  travelType         TravelType
+  description        String?
+  groupChatLink      String?
+  contact            String?
+  images             String[]         @default([])
+  tags               String[]         @default([])
+  isPublic           Boolean          @default(true)
+  status             TravelPlanStatus @default(OPEN)
+  maxParticipants    Int?
+  participantsCount  Int              @default(0)
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model TravelPlanParticipant {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId   String   @db.ObjectId
+  planId   String   @db.ObjectId
+  joinedAt DateTime @default(now())
+
+  // compound unique to prevent duplicate joins
+  @@unique([userId, planId], map: "user_plan_unique")
+}
+
+model TravelPlanReview {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  planId     String   @db.ObjectId
+  hostId     String   @db.ObjectId
+  reviewerId String   @db.ObjectId
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([planId], map: "review_plan_idx")
+  @@index([hostId], map: "review_host_idx")
+  @@index([reviewerId], map: "review_reviewer_idx")
+
+  // one review per user per plan
+  @@unique([planId, reviewerId], map: "plan_reviewer_unique")
 }
