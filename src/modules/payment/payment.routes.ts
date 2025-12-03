@@ -1,10 +1,16 @@
 import { Router } from "express";
-import { createPaymentIntent, confirmSubscription } from "./payment.controller";
+import {
+  createCheckoutSession,
+  confirmSubscription
+} from "./payment.controller";
 import { authGuard } from "../../middlewares/authMiddleware";
 
 const router = Router();
 
-router.post("/create-intent", authGuard(), createPaymentIntent);
+// Create Stripe Checkout session (returns checkoutUrl)
+router.post("/create-intent", authGuard(), createCheckoutSession);
+
+// Confirm subscription after successful payment
 router.post("/confirm", authGuard(), confirmSubscription);
 
 export default router;
