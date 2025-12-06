@@ -24,7 +24,8 @@ const userPublicSelect = {
   ratingCount: true,
   subscriptionStatus: true,
   subscriptionExpiresAt: true,
-  isBlocked: true
+  isBlocked: true,
+  createdAt: true
 };
 
 // GET /api/users/me
@@ -49,7 +50,83 @@ export const getMe = async (req: Request, res: Response, next: NextFunction) => 
   }
 };
 
-// GET /api/users/:id
+// GET /api/users (admin) – list + search + filter + pagination
+export const adminListUsers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user || req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Forbidden"));
+    }
+
+    const {
+      page = "1",
+      limit = "10",
+      search,
+      status,
+      id
+    } = req.query as {
+      page?: string;
+      limit?: string;
+      search?: string;
+      status?: "blocked" | "unblocked";
+      id?: string;
+    };
+
+    const pageNum = Math.max(parseInt(page || "1", 10), 1);
+    const limitNum = Math.max(parseInt(limit || "10", 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+
+    // If specific ID is provided, ignore other filters
+    if (id) {
+      where.id = id;
+    } else {
+      if (search && search.trim().length > 0) {
+        where.OR = [
+          { name: { contains: search, mode: "insensitive" } },
+          { email: { contains: search, mode: "insensitive" } }
+        ];
+      }
+
+      if (status === "blocked") {
+        where.isBlocked = true;
+      } else if (status === "unblocked") {
+        where.isBlocked = false;
+      }
+    }
+
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: "desc" },
+        select: userPublicSelect
+      })
+    ]);
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: users
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/users/:id  (any authenticated user can see other profile)
 export const getUserProfile = async (
   req: Request,
   res: Response,
@@ -138,7 +215,7 @@ export const updatePassword = async (
   }
 };
 
-// PATCH /api/users/:id/admin (admin can set moderator, block user)
+// PATCH /api/users/:id/admin (admin can set moderator, block user, unblock user)
 export const updateUserAdmin = async (
   req: Request,
   res: Response,
