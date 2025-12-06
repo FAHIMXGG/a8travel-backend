@@ -1,31 +1,51 @@
 import { Router } from "express";
 import { authGuard } from "../../middlewares/authMiddleware";
+import { Role } from "@prisma/client";
 import {
   createTravelPlan,
   getAllTravelPlans,
   matchTravelPlans,
   getTravelPlanById,
+  getMyTravelPlans,
+  adminListTravelPlans,
+  updateTravelPlan,
+  updateTravelPlanStatus,
+  deleteTravelPlan,
   joinTravelPlan,
   getPlanParticipants,
   createOrUpdateReview,
-  deleteReview,
-  updateTravelPlanStatus
+  deleteReview
 } from "./travelPlan.controller";
 
 const router = Router();
 
-// suggested endpoints
-router.post("/", authGuard(), createTravelPlan);              // POST /api/travel-plans
-router.get("/", getAllTravelPlans);                           // GET /api/travel-plans
-router.get("/match", matchTravelPlans);                       // GET /api/travel-plans/match
+// create
+router.post("/", authGuard(), createTravelPlan);
 
-// extra useful endpoints
-router.get("/:id", getTravelPlanById);                        // GET /api/travel-plans/:id
-router.post("/:id/join", authGuard(), joinTravelPlan);        // POST /api/travel-plans/:id/join
-router.get("/:id/participants", authGuard(), getPlanParticipants); // GET /api/travel-plans/:id/participants
-router.patch("/:id/status", authGuard(), updateTravelPlanStatus);  // PATCH /api/travel-plans/:id/status (host)
+// public list + match
+router.get("/", getAllTravelPlans);
+router.get("/match", matchTravelPlans);
 
-router.post("/:id/reviews", authGuard(), createOrUpdateReview);    // POST /api/travel-plans/:id/reviews
-router.delete("/:id/reviews/:reviewId", authGuard(), deleteReview); // DELETE /api/travel-plans/:id/reviews/:reviewId
+// host's own plans
+router.get("/my", authGuard(), getMyTravelPlans);
+
+// admin view all plans
+router.get("/admin", authGuard([Role.ADMIN]), adminListTravelPlans);
+
+// single plan
+router.get("/:id", getTravelPlanById);
+
+// manage plan (host or admin)
+router.patch("/:id", authGuard(), updateTravelPlan);
+router.patch("/:id/status", authGuard(), updateTravelPlanStatus);
+router.delete("/:id", authGuard(), deleteTravelPlan);
+
+// join & participants
+router.post("/:id/join", authGuard(), joinTravelPlan);
+router.get("/:id/participants", authGuard(), getPlanParticipants);
+
+// reviews
+router.post("/:id/reviews", authGuard(), createOrUpdateReview);
+router.delete("/:id/reviews/:reviewId", authGuard(), deleteReview);
 
 export default router;
