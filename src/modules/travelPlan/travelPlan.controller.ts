@@ -8,7 +8,9 @@ import {
   updateTravelPlanSchema
 } from "./travelPlan.validation";
 
-// Helper: derive auto status based on dates + max participants
+// ---------------------- Helpers ----------------------
+
+// Auto status based on dates + participants/max
 const deriveStatus = (plan: any) => {
   const now = new Date();
 
@@ -22,6 +24,52 @@ const deriveStatus = (plan: any) => {
   if (now >= plan.startDate && now <= plan.endDate) return "ONGOING";
   return "ENDED";
 };
+
+// Attach participants [{ id, name }] to plans using TravelPlanParticipant + User,
+// without needing Prisma relation fields.
+const attachParticipantsToPlans = async (plans: any | any[]) => {
+  const isArray = Array.isArray(plans);
+  const list = isArray ? plans : [plans];
+
+  if (list.length === 0) {
+    return isArray ? [] : null;
+  }
+
+  const planIds = list.map((p) => p.id);
+
+  const participantRows = await prisma.travelPlanParticipant.findMany({
+    where: { planId: { in: planIds } }
+  });
+
+  const userIds = Array.from(new Set(participantRows.map((p) => p.userId)));
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, name: true }
+  });
+
+  const userMap = new Map(users.map((u) => [u.id, u]));
+
+  const byPlan: Record<string, { id: string; name: string | null }[]> = {};
+
+  for (const row of participantRows) {
+    const u = userMap.get(row.userId);
+    if (!byPlan[row.planId]) byPlan[row.planId] = [];
+    byPlan[row.planId].push({
+      id: row.userId,
+      name: u?.name ?? null
+    });
+  }
+
+  const withParticipants = list.map((plan) => ({
+    ...plan,
+    participants: byPlan[plan.id] || []
+  }));
+
+  return isArray ? withParticipants : withParticipants[0];
+};
+
+// ---------------------- Controllers ----------------------
 
 // POST /api/travel-plans
 export const createTravelPlan = async (
@@ -67,15 +115,25 @@ export const createTravelPlan = async (
       }
     });
 
-    const status = deriveStatus(plan);
-
-    return res.status(201).json(ok({ ...plan, status }, "Travel plan created"));
+    return res
+      .status(201)
+      .json(
+        ok(
+          {
+            ...plan,
+            status: deriveStatus(plan),
+            participants: [],
+            participantsCount: plan.participantsCount
+          },
+          "Travel plan created"
+        )
+      );
   } catch (err) {
     next(err);
   }
 };
 
-// GET /api/travel-plans  (public list with filters + pagination)
+// GET /api/travel-plans (public list with filters + pagination, includes participants)
 export const getAllTravelPlans = async (
   req: Request,
   res: Response,
@@ -110,13 +168,16 @@ export const getAllTravelPlans = async (
     }
 
     if (tags && typeof tags === "string") {
-      const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      const tagList = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       if (tagList.length > 0) {
         where.tags = { hasSome: tagList };
       }
     }
 
-    const [total, plans] = await Promise.all([
+    const [total, plansRaw] = await Promise.all([
       prisma.travelPlan.count({ where }),
       prisma.travelPlan.findMany({
         where,
@@ -126,8 +187,11 @@ export const getAllTravelPlans = async (
       })
     ]);
 
-    const result = plans.map((plan) => ({
+    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+
+    const result = (plansWithParticipants as any[]).map((plan) => ({
       ...plan,
+      participantsCount: plan.participants.length,
       status: deriveStatus(plan)
     }));
 
@@ -147,17 +211,16 @@ export const getAllTravelPlans = async (
   }
 };
 
-// GET /api/travel-plans/match  (same as list but semantically "match")
+// GET /api/travel-plans/match (same behavior as list, semantic "match")
 export const matchTravelPlans = async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
-  // just reuse getAllTravelPlans logic
   return getAllTravelPlans(req, res, next);
 };
 
-// NEW: GET /api/travel-plans/my  (host's own plans with pagination)
+// GET /api/travel-plans/my (host's own plans, includes participants)
 export const getMyTravelPlans = async (
   req: Request,
   res: Response,
@@ -174,7 +237,7 @@ export const getMyTravelPlans = async (
 
     const where = { hostId: req.user.id };
 
-    const [total, plans] = await Promise.all([
+    const [total, plansRaw] = await Promise.all([
       prisma.travelPlan.count({ where }),
       prisma.travelPlan.findMany({
         where,
@@ -184,8 +247,11 @@ export const getMyTravelPlans = async (
       })
     ]);
 
-    const result = plans.map((plan) => ({
+    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+
+    const result = (plansWithParticipants as any[]).map((plan) => ({
       ...plan,
+      participantsCount: plan.participants.length,
       status: deriveStatus(plan)
     }));
 
@@ -205,7 +271,7 @@ export const getMyTravelPlans = async (
   }
 };
 
-// NEW: GET /api/travel-plans/admin  (admin view all plans with filters + pagination)
+// GET /api/travel-plans/admin (admin view all plans with filters/pagination + participants)
 export const adminListTravelPlans = async (
   req: Request,
   res: Response,
@@ -251,7 +317,7 @@ export const adminListTravelPlans = async (
       where.status = status;
     }
 
-    const [total, plans] = await Promise.all([
+    const [total, plansRaw] = await Promise.all([
       prisma.travelPlan.count({ where }),
       prisma.travelPlan.findMany({
         where,
@@ -261,8 +327,11 @@ export const adminListTravelPlans = async (
       })
     ]);
 
-    const result = plans.map((plan) => ({
+    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+
+    const result = (plansWithParticipants as any[]).map((plan) => ({
       ...plan,
+      participantsCount: plan.participants.length,
       status: deriveStatus(plan)
     }));
 
@@ -282,7 +351,7 @@ export const adminListTravelPlans = async (
   }
 };
 
-// GET /api/travel-plans/:id
+// GET /api/travel-plans/:id (single plan + participants)
 export const getTravelPlanById = async (
   req: Request,
   res: Response,
@@ -291,21 +360,27 @@ export const getTravelPlanById = async (
   try {
     const { id } = req.params;
 
-    const plan = await prisma.travelPlan.findUnique({
+    const planRaw = await prisma.travelPlan.findUnique({
       where: { id }
     });
 
-    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+    if (!planRaw) return res.status(404).json(fail("Travel plan not found"));
 
-    const status = deriveStatus(plan);
+    const planWithParticipants: any = await attachParticipantsToPlans(planRaw);
 
-    return res.json(ok({ ...plan, status }));
+    return res.json(
+      ok({
+        ...planWithParticipants,
+        participantsCount: planWithParticipants.participants.length,
+        status: deriveStatus(planWithParticipants)
+      })
+    );
   } catch (err) {
     next(err);
   }
 };
 
-// NEW: PATCH /api/travel-plans/:id  (host can edit their own; admin can also edit)
+// PATCH /api/travel-plans/:id (host or admin can edit)
 export const updateTravelPlan = async (
   req: Request,
   res: Response,
@@ -336,20 +411,29 @@ export const updateTravelPlan = async (
       return res.status(400).json(fail("Start date must be before end date"));
     }
 
-    const updated = await prisma.travelPlan.update({
+    const updatedRaw = await prisma.travelPlan.update({
       where: { id },
-      data,
+      data
     });
 
-    const status = deriveStatus(updated);
+    const updatedWithParticipants: any = await attachParticipantsToPlans(updatedRaw);
 
-    return res.json(ok({ ...updated, status }, "Travel plan updated"));
+    return res.json(
+      ok(
+        {
+          ...updatedWithParticipants,
+          participantsCount: updatedWithParticipants.participants.length,
+          status: deriveStatus(updatedWithParticipants)
+        },
+        "Travel plan updated"
+      )
+    );
   } catch (err) {
     next(err);
   }
 };
 
-// PATCH /api/travel-plans/:id/status  (host manual change)
+// PATCH /api/travel-plans/:id/status (host or admin)
 export const updateTravelPlanStatus = async (
   req: Request,
   res: Response,
@@ -371,20 +455,29 @@ export const updateTravelPlanStatus = async (
       return res.status(403).json(fail("Only host or admin can change status"));
     }
 
-    const updated = await prisma.travelPlan.update({
+    const updatedRaw = await prisma.travelPlan.update({
       where: { id },
       data: { status: parsed.data.status }
     });
 
-    const status = deriveStatus(updated);
+    const updatedWithParticipants: any = await attachParticipantsToPlans(updatedRaw);
 
-    return res.json(ok({ ...updated, status }, "Status updated"));
+    return res.json(
+      ok(
+        {
+          ...updatedWithParticipants,
+          participantsCount: updatedWithParticipants.participants.length,
+          status: deriveStatus(updatedWithParticipants)
+        },
+        "Status updated"
+      )
+    );
   } catch (err) {
     next(err);
   }
 };
 
-// NEW: DELETE /api/travel-plans/:id  (host or admin)
+// DELETE /api/travel-plans/:id (host or admin)
 export const deleteTravelPlan = async (
   req: Request,
   res: Response,
@@ -402,7 +495,6 @@ export const deleteTravelPlan = async (
       return res.status(403).json(fail("Only host or admin can delete this plan"));
     }
 
-    // delete participants & reviews as well
     await prisma.travelPlanParticipant.deleteMany({ where: { planId: id } });
     await prisma.travelPlanReview.deleteMany({ where: { planId: id } });
     await prisma.travelPlan.delete({ where: { id } });
@@ -481,7 +573,7 @@ export const joinTravelPlan = async (
   }
 };
 
-// GET /api/travel-plans/:id/participants  (host only)
+// GET /api/travel-plans/:id/participants (host or admin)
 export const getPlanParticipants = async (
   req: Request,
   res: Response,
