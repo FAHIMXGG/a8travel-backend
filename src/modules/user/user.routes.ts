@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getMe,
+  getMyTravelHistory,
   adminListUsers,
   getUserProfile,
   updateProfile,
@@ -30,5 +31,8 @@ router.patch("/:id/password", authGuard(), updatePassword);
 
 // admin manage role / block / unblock
 router.patch("/:id/admin", authGuard([Role.ADMIN]), updateUserAdmin);
+
+router.get("/me/travel-history", authGuard(), getMyTravelHistory);
+
 
 export default router;

@@ -249,3 +249,82 @@ export const updateUserAdmin = async (
     next(err);
   }
 };
+
+// NEW: GET /api/users/me/travel-history  (joined trips, ended, pagination)
+export const getMyTravelHistory = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { page = "1", limit = "10" } = req.query;
+
+    const pageNum = Math.max(parseInt(page as string, 10), 1);
+    const limitNum = Math.max(parseInt(limit as string, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { travelHistory: true }
+    });
+
+    if (!user) return res.status(404).json(fail("User not found"));
+
+    const ids = user.travelHistory || [];
+    if (ids.length === 0) {
+      return res.json(
+        ok({
+          meta: {
+            total: 0,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: 0
+          },
+          data: []
+        })
+      );
+    }
+
+    const now = new Date();
+
+    const [total, plans] = await Promise.all([
+      prisma.travelPlan.count({
+        where: {
+          id: { in: ids },
+          endDate: { lt: now }
+        }
+      }),
+      prisma.travelPlan.findMany({
+        where: {
+          id: { in: ids },
+          endDate: { lt: now }
+        },
+        orderBy: { endDate: "desc" },
+        skip,
+        take: limitNum
+      })
+    ]);
+
+    const result = plans.map((plan) => ({
+      ...plan,
+      status: "ENDED" as const
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+

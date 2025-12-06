@@ -4,14 +4,14 @@ import { ok, fail } from "../../utils/apiResponse";
 import {
   createTravelPlanSchema,
   reviewSchema,
-  updateTravelPlanStatusSchema
+  updateTravelPlanStatusSchema,
+  updateTravelPlanSchema
 } from "./travelPlan.validation";
 
 // Helper: derive auto status based on dates + max participants
 const deriveStatus = (plan: any) => {
   const now = new Date();
 
-  // manual override stays if closed or canceled
   if (plan.status === "CANCELED" || plan.status === "CLOSED") return plan.status;
 
   if (plan.maxParticipants && plan.participantsCount >= plan.maxParticipants) {
@@ -75,8 +75,7 @@ export const createTravelPlan = async (
   }
 };
 
-// GET /api/travel-plans  (list all, optional filters later)
-// GET /api/travel-plans  (list all with pagination)
+// GET /api/travel-plans  (public list with filters + pagination)
 export const getAllTravelPlans = async (
   req: Request,
   res: Response,
@@ -148,48 +147,32 @@ export const getAllTravelPlans = async (
   }
 };
 
-
-// GET /api/travel-plans/match?destination=&fromDate=&toDate=&tags=
-// GET /api/travel-plans/match  (search + pagination)
+// GET /api/travel-plans/match  (same as list but semantically "match")
 export const matchTravelPlans = async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
+  // just reuse getAllTravelPlans logic
+  return getAllTravelPlans(req, res, next);
+};
+
+// NEW: GET /api/travel-plans/my  (host's own plans with pagination)
+export const getMyTravelPlans = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
-    const { destination, fromDate, toDate, tags, page = "1", limit = "10" } = req.query;
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { page = "1", limit = "10" } = req.query;
 
     const pageNum = Math.max(parseInt(page as string, 10), 1);
     const limitNum = Math.max(parseInt(limit as string, 10), 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const where: any = {
-      isPublic: true
-    };
-
-    if (destination && typeof destination === "string") {
-      where.OR = [
-        { destinationCountry: { contains: destination, mode: "insensitive" } },
-        { destinationCity: { contains: destination, mode: "insensitive" } }
-      ];
-    }
-
-    if (fromDate && typeof fromDate === "string") {
-      const from = new Date(fromDate);
-      where.startDate = { gte: from };
-    }
-
-    if (toDate && typeof toDate === "string") {
-      const to = new Date(toDate);
-      where.endDate = { lte: to };
-    }
-
-    if (tags && typeof tags === "string") {
-      const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean);
-      if (tagList.length > 0) {
-        where.tags = { hasSome: tagList };
-      }
-    }
+    const where = { hostId: req.user.id };
 
     const [total, plans] = await Promise.all([
       prisma.travelPlan.count({ where }),
@@ -197,7 +180,7 @@ export const matchTravelPlans = async (
         where,
         skip,
         take: limitNum,
-        orderBy: { startDate: "asc" }
+        orderBy: { startDate: "desc" }
       })
     ]);
 
@@ -215,13 +198,89 @@ export const matchTravelPlans = async (
           totalPages: Math.ceil(total / limitNum)
         },
         data: result
-      }, "Matched travel plans")
+      })
     );
   } catch (err) {
     next(err);
   }
 };
 
+// NEW: GET /api/travel-plans/admin  (admin view all plans with filters + pagination)
+export const adminListTravelPlans = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user || req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Forbidden"));
+    }
+
+    const {
+      page = "1",
+      limit = "10",
+      hostId,
+      destination,
+      status
+    } = req.query as {
+      page?: string;
+      limit?: string;
+      hostId?: string;
+      destination?: string;
+      status?: string;
+    };
+
+    const pageNum = Math.max(parseInt(page || "1", 10), 1);
+    const limitNum = Math.max(parseInt(limit || "10", 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+
+    if (hostId) {
+      where.hostId = hostId;
+    }
+
+    if (destination) {
+      where.OR = [
+        { destinationCountry: { contains: destination, mode: "insensitive" } },
+        { destinationCity: { contains: destination, mode: "insensitive" } }
+      ];
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    const [total, plans] = await Promise.all([
+      prisma.travelPlan.count({ where }),
+      prisma.travelPlan.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: "desc" }
+      })
+    ]);
+
+    const result = plans.map((plan) => ({
+      ...plan,
+      status: deriveStatus(plan)
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
 
 // GET /api/travel-plans/:id
 export const getTravelPlanById = async (
@@ -246,6 +305,50 @@ export const getTravelPlanById = async (
   }
 };
 
+// NEW: PATCH /api/travel-plans/:id  (host can edit their own; admin can also edit)
+export const updateTravelPlan = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+    const { id } = req.params;
+
+    const plan = await prisma.travelPlan.findUnique({ where: { id } });
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    if (plan.hostId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Only host or admin can edit this plan"));
+    }
+
+    const parsed = updateTravelPlanSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(fail("Validation error", parsed.error.format()));
+    }
+
+    const data = parsed.data as any;
+
+    if (data.startDate) data.startDate = new Date(data.startDate);
+    if (data.endDate) data.endDate = new Date(data.endDate);
+
+    if (data.startDate && data.endDate && data.startDate >= data.endDate) {
+      return res.status(400).json(fail("Start date must be before end date"));
+    }
+
+    const updated = await prisma.travelPlan.update({
+      where: { id },
+      data,
+    });
+
+    const status = deriveStatus(updated);
+
+    return res.json(ok({ ...updated, status }, "Travel plan updated"));
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PATCH /api/travel-plans/:id/status  (host manual change)
 export const updateTravelPlanStatus = async (
   req: Request,
@@ -264,8 +367,8 @@ export const updateTravelPlanStatus = async (
     const plan = await prisma.travelPlan.findUnique({ where: { id } });
     if (!plan) return res.status(404).json(fail("Travel plan not found"));
 
-    if (plan.hostId !== req.user.id) {
-      return res.status(403).json(fail("Only host can change status"));
+    if (plan.hostId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Only host or admin can change status"));
     }
 
     const updated = await prisma.travelPlan.update({
@@ -276,6 +379,35 @@ export const updateTravelPlanStatus = async (
     const status = deriveStatus(updated);
 
     return res.json(ok({ ...updated, status }, "Status updated"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// NEW: DELETE /api/travel-plans/:id  (host or admin)
+export const deleteTravelPlan = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { id } = req.params;
+
+    const plan = await prisma.travelPlan.findUnique({ where: { id } });
+    if (!plan) return res.status(404).json(fail("Travel plan not found"));
+
+    if (plan.hostId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Only host or admin can delete this plan"));
+    }
+
+    // delete participants & reviews as well
+    await prisma.travelPlanParticipant.deleteMany({ where: { planId: id } });
+    await prisma.travelPlanReview.deleteMany({ where: { planId: id } });
+    await prisma.travelPlan.delete({ where: { id } });
+
+    return res.json(ok(null, "Travel plan deleted"));
   } catch (err) {
     next(err);
   }
@@ -316,7 +448,6 @@ export const joinTravelPlan = async (
       return res.status(400).json(fail("You already joined this plan"));
     }
 
-    // check max participants
     if (plan.maxParticipants && plan.participantsCount >= plan.maxParticipants) {
       return res.status(400).json(fail("This plan is full"));
     }
@@ -335,7 +466,6 @@ export const joinTravelPlan = async (
       }
     });
 
-    // add to user travel history
     await prisma.user.update({
       where: { id: userId },
       data: {
@@ -366,15 +496,14 @@ export const getPlanParticipants = async (
     const plan = await prisma.travelPlan.findUnique({ where: { id } });
     if (!plan) return res.status(404).json(fail("Travel plan not found"));
 
-    if (plan.hostId !== userId) {
-      return res.status(403).json(fail("Only host can view participants"));
+    if (plan.hostId !== userId && req.user.role !== "ADMIN") {
+      return res.status(403).json(fail("Only host or admin can view participants"));
     }
 
     const participants = await prisma.travelPlanParticipant.findMany({
       where: { planId: id }
     });
 
-    // You can later join with user info on frontend, or we can fetch basic user data:
     const userIds = participants.map((p) => p.userId);
     const users = await prisma.user.findMany({
       where: { id: { in: userIds } },
@@ -417,7 +546,6 @@ export const createOrUpdateReview = async (
         .json(fail("You can only review a trip after it is completed"));
     }
 
-    // must have joined the plan
     const joined = await prisma.travelPlanParticipant.findUnique({
       where: { userId_planId: { userId, planId: id } }
     });
@@ -467,7 +595,6 @@ export const createOrUpdateReview = async (
       });
     }
 
-    // recalc host rating
     const stats = await prisma.travelPlanReview.aggregate({
       where: { hostId: plan.hostId },
       _avg: { rating: true },
@@ -516,7 +643,6 @@ export const deleteReview = async (
       where: { id: reviewId }
     });
 
-    // recalc host rating
     const stats = await prisma.travelPlanReview.aggregate({
       where: { hostId: review.hostId },
       _avg: { rating: true },
