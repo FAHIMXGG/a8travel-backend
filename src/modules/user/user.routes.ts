@@ -7,7 +7,8 @@ import {
   updateProfile,
   updatePassword,
   updateUserAdmin,
-  searchUsers
+  searchUsers,
+  getAllUsers
 } from "./user.controller";
 import { authGuard } from "../../middlewares/authMiddleware";
 import { Role } from "@prisma/client";
@@ -16,6 +17,10 @@ const router = Router();
 
 // current user from cookie / bearer token
 router.get("/me", authGuard(), getMe);
+
+// public: get all users with pagination
+// GET /api/users/all?page=&limit=
+router.get("/all", getAllUsers);
 
 // public: search users by any field
 // GET /api/users/search?query=&page=&limit=

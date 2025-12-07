@@ -318,6 +318,56 @@ export const searchUsers = async (
   }
 };
 
+// GET /api/users/all (public) – get all users with pagination
+export const getAllUsers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const {
+      page = "1",
+      limit = "10"
+    } = req.query as {
+      page?: string;
+      limit?: string;
+    };
+
+    const pageNum = Math.max(parseInt(page || "1", 10), 1);
+    const limitNum = Math.max(parseInt(limit || "10", 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {
+      isBlocked: false // Only show non-blocked users in public list
+    };
+
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: "desc" },
+        select: userPublicSelect
+      })
+    ]);
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: users
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
 // NEW: GET /api/users/me/travel-history  (joined trips, ended, pagination)
 export const getMyTravelHistory = async (
   req: Request,
