@@ -954,3 +954,86 @@ export const deleteReview = async (
     next(err);
   }
 };
+
+
+export const getMyTravelHistory = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    if (!req.user) return res.status(401).json(fail("Unauthorized"));
+
+    const { page = "1", limit = "10" } = req.query;
+
+    const pageNum = Math.max(parseInt(page as string, 10), 1);
+    const limitNum = Math.max(parseInt(limit as string, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    // 1) Load user's travelHistory (all joined plan IDs)
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { travelHistory: true }
+    });
+
+    if (!user) return res.status(404).json(fail("User not found"));
+
+    const ids: string[] = user.travelHistory || [];
+    if (ids.length === 0) {
+      return res.json(
+        ok({
+          meta: {
+            total: 0,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: 0
+          },
+          data: []
+        })
+      );
+    }
+
+    // 2) Get ALL plans from travelHistory (no endDate filter)
+    const [total, plansRaw] = await Promise.all([
+      prisma.travelPlan.count({
+        where: {
+          id: { in: ids }
+        }
+      }),
+      prisma.travelPlan.findMany({
+        where: {
+          id: { in: ids }
+        },
+        orderBy: { startDate: "desc" }, // newest upcoming / latest first
+        skip,
+        take: limitNum
+      })
+    ]);
+
+    // 3) Attach participants, host info, reviews
+    const withParticipants = await attachParticipantsToPlans(plansRaw);
+    const withHost = await attachHostInfo(withParticipants);
+    const withReviews = await attachReviewsToPlans(withHost);
+
+    // 4) Add participantsCount and REAL status (OPEN/ONGOING/ENDED/etc)
+    const result = (withReviews as any[]).map((plan) => ({
+      ...plan,
+      participantsCount: plan.participants.length,
+      status: deriveStatus(plan)
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};

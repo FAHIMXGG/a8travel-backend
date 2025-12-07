@@ -15,7 +15,8 @@ import {
   getPlanParticipants,
   createOrUpdateReview,
   deleteReview,
-  searchTravelPlans
+  searchTravelPlans,
+  getMyTravelHistory
 } from "./travelPlan.controller";
 
 const router = Router();
@@ -50,5 +51,7 @@ router.get("/:id/participants", authGuard(), getPlanParticipants);
 // reviews
 router.post("/:id/reviews", authGuard(), createOrUpdateReview);
 router.delete("/:id/reviews/:reviewId", authGuard(), deleteReview);
+
+router.get("/me/travel-history", authGuard(), getMyTravelHistory);
 
 export default router;

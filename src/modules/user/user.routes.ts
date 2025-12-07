@@ -21,7 +21,8 @@ router.get("/me", authGuard(), getMe);
 router.get("/", authGuard([Role.ADMIN]), adminListUsers);
 
 // any user by id (authenticated)
-router.get("/:id", authGuard(), getUserProfile);
+// router.get("/:id", authGuard(), getUserProfile);
+router.get("/:id", getUserProfile);
 
 // self or admin profile update
 router.patch("/:id", authGuard(), updateProfile);
