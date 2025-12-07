@@ -25,8 +25,7 @@ const deriveStatus = (plan: any) => {
   return "ENDED";
 };
 
-// Attach participants [{ id, name }] to plans using TravelPlanParticipant + User,
-// without needing Prisma relation fields.
+// Attach participants [{ id, name }] to plans using TravelPlanParticipant + User
 const attachParticipantsToPlans = async (plans: any | any[]) => {
   const isArray = Array.isArray(plans);
   const list = isArray ? plans : [plans];
@@ -67,6 +66,95 @@ const attachParticipantsToPlans = async (plans: any | any[]) => {
   }));
 
   return isArray ? withParticipants : withParticipants[0];
+};
+
+// Attach host info (name, image, ratingAverage, ratingCount)
+const attachHostInfo = async (plans: any | any[]) => {
+  const isArray = Array.isArray(plans);
+  const list = isArray ? plans : [plans];
+
+  if (list.length === 0) return isArray ? [] : null;
+
+  const hostIds = Array.from(new Set(list.map((p) => p.hostId)));
+
+  const hosts = await prisma.user.findMany({
+    where: { id: { in: hostIds } },
+    select: {
+      id: true,
+      name: true,
+      image: true,
+      ratingAverage: true,
+      ratingCount: true
+    }
+  });
+
+  const hostMap = new Map(hosts.map((h) => [h.id, h]));
+
+  const finalPlans = list.map((plan) => {
+    const host = hostMap.get(plan.hostId);
+    return {
+      ...plan,
+      hostName: host?.name ?? null,
+      hostImage: host?.image ?? null,
+      hostRatingAverage: host?.ratingAverage ?? 0,
+      hostRatingCount: host?.ratingCount ?? 0
+    };
+  });
+
+  return isArray ? finalPlans : finalPlans[0];
+};
+
+// Attach reviews [{ id, reviewerId, name, rating, comment, createdAt }]
+const attachReviewsToPlans = async (plans: any | any[]) => {
+  const isArray = Array.isArray(plans);
+  const list = isArray ? plans : [plans];
+
+  if (list.length === 0) return isArray ? [] : null;
+
+  const planIds = list.map((p) => p.id);
+
+  const reviewRows = await prisma.travelPlanReview.findMany({
+    where: { planId: { in: planIds } },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      planId: true,
+      reviewerId: true,
+      rating: true,
+      comment: true,
+      createdAt: true
+    }
+  });
+
+  const reviewerIds = Array.from(new Set(reviewRows.map((r) => r.reviewerId)));
+
+  const reviewers = await prisma.user.findMany({
+    where: { id: { in: reviewerIds } },
+    select: { id: true, name: true }
+  });
+
+  const reviewerMap = new Map(reviewers.map((u) => [u.id, u]));
+
+  const byPlan: Record<string, any[]> = {};
+  for (const r of reviewRows) {
+    const u = reviewerMap.get(r.reviewerId);
+    if (!byPlan[r.planId]) byPlan[r.planId] = [];
+    byPlan[r.planId].push({
+      id: r.id,
+      reviewerId: r.reviewerId,
+      name: u?.name ?? null,
+      rating: r.rating,
+      comment: r.comment,
+      createdAt: r.createdAt
+    });
+  }
+
+  const final = list.map((plan) => ({
+    ...plan,
+    reviews: byPlan[plan.id] || []
+  }));
+
+  return isArray ? final : final[0];
 };
 
 // ---------------------- Controllers ----------------------
@@ -115,25 +203,26 @@ export const createTravelPlan = async (
       }
     });
 
-    return res
-      .status(201)
-      .json(
-        ok(
-          {
-            ...plan,
-            status: deriveStatus(plan),
-            participants: [],
-            participantsCount: plan.participantsCount
-          },
-          "Travel plan created"
-        )
-      );
+    const withHost = await attachHostInfo(plan);
+
+    return res.status(201).json(
+      ok(
+        {
+          ...withHost,
+          status: deriveStatus(plan),
+          participants: [],
+          participantsCount: plan.participantsCount,
+          reviews: []
+        },
+        "Travel plan created"
+      )
+    );
   } catch (err) {
     next(err);
   }
 };
 
-// GET /api/travel-plans (public list with filters + pagination, includes participants)
+// GET /api/travel-plans (public list with filters + pagination, includes participants + host + reviews)
 export const getAllTravelPlans = async (
   req: Request,
   res: Response,
@@ -187,9 +276,11 @@ export const getAllTravelPlans = async (
       })
     ]);
 
-    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+    const withParticipants = (await attachParticipantsToPlans(plansRaw)) as any[];
+    const withHostInfo = (await attachHostInfo(withParticipants)) as any[];
+    const withReviews = (await attachReviewsToPlans(withHostInfo)) as any[];
 
-    const result = (plansWithParticipants as any[]).map((plan) => ({
+    const result = withReviews.map((plan) => ({
       ...plan,
       participantsCount: plan.participants.length,
       status: deriveStatus(plan)
@@ -220,7 +311,106 @@ export const matchTravelPlans = async (
   return getAllTravelPlans(req, res, next);
 };
 
-// GET /api/travel-plans/my (host's own plans, includes participants)
+// GET /api/travel-plans/search
+export const searchTravelPlans = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { query = "", page = "1", limit = "10" } = req.query;
+
+    const q = String(query).trim();
+    if (!q) {
+      return res.status(400).json(fail("Search query is required"));
+    }
+
+    const pageNum = Math.max(parseInt(page as string, 10), 1);
+    const limitNum = Math.max(parseInt(limit as string, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Search hosts by name/email
+    const matchedHosts = await prisma.user.findMany({
+      where: {
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } }
+        ]
+      },
+      select: { id: true }
+    });
+
+    const hostIds = matchedHosts.map((u) => u.id);
+
+    const or: any[] = [
+      { title: { contains: q, mode: "insensitive" } },
+      { description: { contains: q, mode: "insensitive" } },
+      { destinationCountry: { contains: q, mode: "insensitive" } },
+      { destinationCity: { contains: q, mode: "insensitive" } },
+      { contact: { contains: q, mode: "insensitive" } },
+      { groupChatLink: { contains: q, mode: "insensitive" } },
+      { tags: { has: q.toLowerCase() } }
+    ];
+
+    // TravelType enum matching
+    const qLower = q.toLowerCase();
+    const travelTypeMap: Record<string, "SOLO" | "FAMILY" | "FRIENDS"> = {
+      solo: "SOLO",
+      family: "FAMILY",
+      friends: "FRIENDS"
+    };
+    const travelTypeValue = travelTypeMap[qLower];
+    if (travelTypeValue) {
+      or.push({ travelType: travelTypeValue });
+    }
+
+    // search by hostId if host name/email matches
+    if (hostIds.length > 0) {
+      or.push({ hostId: { in: hostIds } });
+    }
+
+    const where: any = {
+      isPublic: true,
+      OR: or
+    };
+
+    const [total, plansRaw] = await Promise.all([
+      prisma.travelPlan.count({ where }),
+      prisma.travelPlan.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: "desc" }
+      })
+    ]);
+
+    const withParticipants = await attachParticipantsToPlans(plansRaw);
+    const withHostInfo = await attachHostInfo(withParticipants);
+    const withReviews = (await attachReviewsToPlans(withHostInfo)) as any[];
+
+    const result = withReviews.map((plan) => ({
+      ...plan,
+      participantsCount: plan.participants.length,
+      status: deriveStatus(plan)
+    }));
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: result
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/travel-plans/my (host's own plans, includes participants + host + reviews)
 export const getMyTravelPlans = async (
   req: Request,
   res: Response,
@@ -247,9 +437,11 @@ export const getMyTravelPlans = async (
       })
     ]);
 
-    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+    const withParticipants = (await attachParticipantsToPlans(plansRaw)) as any[];
+    const withHostInfo = (await attachHostInfo(withParticipants)) as any[];
+    const withReviews = (await attachReviewsToPlans(withHostInfo)) as any[];
 
-    const result = (plansWithParticipants as any[]).map((plan) => ({
+    const result = withReviews.map((plan) => ({
       ...plan,
       participantsCount: plan.participants.length,
       status: deriveStatus(plan)
@@ -271,7 +463,7 @@ export const getMyTravelPlans = async (
   }
 };
 
-// GET /api/travel-plans/admin (admin view all plans with filters/pagination + participants)
+// GET /api/travel-plans/admin (admin view all plans with filters/pagination + participants + host + reviews)
 export const adminListTravelPlans = async (
   req: Request,
   res: Response,
@@ -327,9 +519,11 @@ export const adminListTravelPlans = async (
       })
     ]);
 
-    const plansWithParticipants = await attachParticipantsToPlans(plansRaw);
+    const withParticipants = (await attachParticipantsToPlans(plansRaw)) as any[];
+    const withHostInfo = (await attachHostInfo(withParticipants)) as any[];
+    const withReviews = (await attachReviewsToPlans(withHostInfo)) as any[];
 
-    const result = (plansWithParticipants as any[]).map((plan) => ({
+    const result = withReviews.map((plan) => ({
       ...plan,
       participantsCount: plan.participants.length,
       status: deriveStatus(plan)
@@ -351,7 +545,7 @@ export const adminListTravelPlans = async (
   }
 };
 
-// GET /api/travel-plans/:id (single plan + participants)
+// GET /api/travel-plans/:id (single plan + participants + host + reviews)
 export const getTravelPlanById = async (
   req: Request,
   res: Response,
@@ -366,13 +560,15 @@ export const getTravelPlanById = async (
 
     if (!planRaw) return res.status(404).json(fail("Travel plan not found"));
 
-    const planWithParticipants: any = await attachParticipantsToPlans(planRaw);
+    const withParticipants = await attachParticipantsToPlans(planRaw);
+    const withHost = await attachHostInfo(withParticipants);
+    const finalPlan = await attachReviewsToPlans(withHost);
 
     return res.json(
       ok({
-        ...planWithParticipants,
-        participantsCount: planWithParticipants.participants.length,
-        status: deriveStatus(planWithParticipants)
+        ...finalPlan,
+        participantsCount: finalPlan.participants.length,
+        status: deriveStatus(finalPlan)
       })
     );
   } catch (err) {
@@ -416,14 +612,16 @@ export const updateTravelPlan = async (
       data
     });
 
-    const updatedWithParticipants: any = await attachParticipantsToPlans(updatedRaw);
+    const withParticipants = await attachParticipantsToPlans(updatedRaw);
+    const withHost = await attachHostInfo(withParticipants);
+    const finalPlan = await attachReviewsToPlans(withHost);
 
     return res.json(
       ok(
         {
-          ...updatedWithParticipants,
-          participantsCount: updatedWithParticipants.participants.length,
-          status: deriveStatus(updatedWithParticipants)
+          ...finalPlan,
+          participantsCount: finalPlan.participants.length,
+          status: deriveStatus(finalPlan)
         },
         "Travel plan updated"
       )
@@ -460,14 +658,16 @@ export const updateTravelPlanStatus = async (
       data: { status: parsed.data.status }
     });
 
-    const updatedWithParticipants: any = await attachParticipantsToPlans(updatedRaw);
+    const withParticipants = await attachParticipantsToPlans(updatedRaw);
+    const withHost = await attachHostInfo(withParticipants);
+    const finalPlan = await attachReviewsToPlans(withHost);
 
     return res.json(
       ok(
         {
-          ...updatedWithParticipants,
-          participantsCount: updatedWithParticipants.participants.length,
-          status: deriveStatus(updatedWithParticipants)
+          ...finalPlan,
+          participantsCount: finalPlan.participants.length,
+          status: deriveStatus(finalPlan)
         },
         "Status updated"
       )

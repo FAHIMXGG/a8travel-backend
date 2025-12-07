@@ -14,7 +14,8 @@ import {
   joinTravelPlan,
   getPlanParticipants,
   createOrUpdateReview,
-  deleteReview
+  deleteReview,
+  searchTravelPlans
 } from "./travelPlan.controller";
 
 const router = Router();
@@ -25,6 +26,8 @@ router.post("/", authGuard(), createTravelPlan);
 // public list + match
 router.get("/", getAllTravelPlans);
 router.get("/match", matchTravelPlans);
+
+router.get("/search", searchTravelPlans);
 
 // host's own plans
 router.get("/my", authGuard(), getMyTravelPlans);
