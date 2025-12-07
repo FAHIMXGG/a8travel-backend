@@ -16,6 +16,7 @@ const userPublicSelect = {
   role: true,
   image: true,
   bio: true,
+  phone: true,
   travelInterests: true,
   visitedCountries: true,
   currentLocation: true,
@@ -88,7 +89,8 @@ export const adminListUsers = async (
       if (search && search.trim().length > 0) {
         where.OR = [
           { name: { contains: search, mode: "insensitive" } },
-          { email: { contains: search, mode: "insensitive" } }
+          { email: { contains: search, mode: "insensitive" } },
+          { phone: { contains: search, mode: "insensitive" } }
         ];
       }
 
@@ -245,6 +247,72 @@ export const updateUserAdmin = async (
     });
 
     return res.json(ok(user, "User updated by admin"));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/users/search (public) – search users by any field
+export const searchUsers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const {
+      page = "1",
+      limit = "10",
+      query
+    } = req.query as {
+      page?: string;
+      limit?: string;
+      query?: string;
+    };
+
+    const pageNum = Math.max(parseInt(page || "1", 10), 1);
+    const limitNum = Math.max(parseInt(limit || "10", 10), 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {
+      isBlocked: false // Only show non-blocked users in public search
+    };
+
+    // Search across multiple user fields
+    if (query && query.trim().length > 0) {
+      const searchTerm = query.trim();
+      where.OR = [
+        { name: { contains: searchTerm, mode: "insensitive" } },
+        { email: { contains: searchTerm, mode: "insensitive" } },
+        { phone: { contains: searchTerm, mode: "insensitive" } },
+        { bio: { contains: searchTerm, mode: "insensitive" } },
+        { currentLocation: { contains: searchTerm, mode: "insensitive" } },
+        { travelInterests: { has: searchTerm } },
+        { visitedCountries: { has: searchTerm } }
+      ];
+    }
+
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: "desc" },
+        select: userPublicSelect
+      })
+    ]);
+
+    return res.json(
+      ok({
+        meta: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        },
+        data: users
+      })
+    );
   } catch (err) {
     next(err);
   }

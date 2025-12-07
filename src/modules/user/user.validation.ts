@@ -4,6 +4,7 @@ export const updateProfileSchema = z.object({
   name: z.string().min(2).optional(),
   image: z.string().url().optional(),
   bio: z.string().max(500).optional(),
+  phone: z.string().optional(),
   travelInterests: z.array(z.string()).optional(),
   visitedCountries: z.array(z.string()).optional(),
   currentLocation: z.string().optional(),

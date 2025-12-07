@@ -44,6 +44,7 @@ model User {
 
   image                 String?
   bio                   String?
+  phone                 String              @default("")
   travelInterests       String[]            @default([])
   visitedCountries      String[]            @default([])
   currentLocation       String?
