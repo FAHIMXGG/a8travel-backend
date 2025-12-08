@@ -252,12 +252,21 @@ export const updateUserAdmin = async (
   }
 };
 
-// GET /api/users/search (public) – search users by any field
+// Helper function for case-insensitive partial matching in arrays
+const arrayContainsPartial = (array: string[], searchTerm: string): boolean => {
+  if (!array || array.length === 0) return false;
+  const searchLower = searchTerm.toLowerCase();
+  return array.some((item) => item.toLowerCase().includes(searchLower));
+};
+
+// GET /api/users/search (public) – search users by any field with case-insensitive partial matching
 // Supports: query (general search), visitedCountries, travelInterests
+// All searches are case-insensitive and support partial matching (e.g., "fra" matches "France")
 // Examples:
 //   /api/users/search?query=john
-//   /api/users/search?visitedCountries=France,Italy
-//   /api/users/search?travelInterests=Adventure,Beach
+//   /api/users/search?query=fra (finds "France", "French", etc.)
+//   /api/users/search?visitedCountries=fra (finds users with "France", "French", etc.)
+//   /api/users/search?travelInterests=adven (finds users with "Adventure", "Adventurous", etc.)
 //   /api/users/search?query=john&visitedCountries=France&travelInterests=Adventure
 export const searchUsers = async (
   req: Request,
@@ -283,13 +292,14 @@ export const searchUsers = async (
     const limitNum = Math.max(parseInt(limit || "10", 10), 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // Build base where clause
     const where: any = {
       isBlocked: false // Only show non-blocked users in public search
     };
 
     const conditions: any[] = [];
 
-    // General query search across multiple fields
+    // General query search across string fields (case-insensitive)
     if (query && query.trim().length > 0) {
       const searchTerm = query.trim();
       conditions.push(
@@ -297,40 +307,9 @@ export const searchUsers = async (
         { email: { contains: searchTerm, mode: "insensitive" } },
         { phone: { contains: searchTerm, mode: "insensitive" } },
         { bio: { contains: searchTerm, mode: "insensitive" } },
-        { currentLocation: { contains: searchTerm, mode: "insensitive" } },
-        { travelInterests: { has: searchTerm } },
-        { visitedCountries: { has: searchTerm } }
+        { currentLocation: { contains: searchTerm, mode: "insensitive" } }
       );
-    }
-
-    // Specific filter: visitedCountries (supports comma-separated values)
-    if (visitedCountries && visitedCountries.trim().length > 0) {
-      const countries = visitedCountries
-        .split(",")
-        .map((c) => c.trim())
-        .filter((c) => c.length > 0);
-      if (countries.length > 0) {
-        if (countries.length === 1) {
-          where.visitedCountries = { has: countries[0] };
-        } else {
-          where.visitedCountries = { hasSome: countries };
-        }
-      }
-    }
-
-    // Specific filter: travelInterests (supports comma-separated values)
-    if (travelInterests && travelInterests.trim().length > 0) {
-      const interests = travelInterests
-        .split(",")
-        .map((i) => i.trim())
-        .filter((i) => i.length > 0);
-      if (interests.length > 0) {
-        if (interests.length === 1) {
-          where.travelInterests = { has: interests[0] };
-        } else {
-          where.travelInterests = { hasSome: interests };
-        }
-      }
+      // Array fields will be filtered in memory for partial matching
     }
 
     // If we have general query conditions, add them as OR
@@ -338,16 +317,75 @@ export const searchUsers = async (
       where.OR = conditions;
     }
 
-    const [total, users] = await Promise.all([
-      prisma.user.count({ where }),
-      prisma.user.findMany({
-        where,
-        skip,
-        take: limitNum,
-        orderBy: { createdAt: "desc" },
-        select: userPublicSelect
-      })
-    ]);
+    // Fetch all non-blocked users (we'll filter in memory for array partial matching)
+    let allUsers = await prisma.user.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      select: userPublicSelect
+    });
+
+    // Apply in-memory filtering for case-insensitive partial matching
+
+    // Filter by general query (including array fields)
+    if (query && query.trim().length > 0) {
+      const searchTerm = query.trim().toLowerCase();
+      allUsers = allUsers.filter((user) => {
+        // Check string fields (already filtered by Prisma, but double-check for consistency)
+        const matchesStringField =
+          user.name?.toLowerCase().includes(searchTerm) ||
+          user.email?.toLowerCase().includes(searchTerm) ||
+          user.phone?.toLowerCase().includes(searchTerm) ||
+          user.bio?.toLowerCase().includes(searchTerm) ||
+          user.currentLocation?.toLowerCase().includes(searchTerm);
+
+        // Check array fields for partial matches
+        const matchesArrayField =
+          arrayContainsPartial(user.travelInterests || [], searchTerm) ||
+          arrayContainsPartial(user.visitedCountries || [], searchTerm);
+
+        return matchesStringField || matchesArrayField;
+      });
+    }
+
+    // Filter by visitedCountries (case-insensitive partial match)
+    if (visitedCountries && visitedCountries.trim().length > 0) {
+      const countryTerms = visitedCountries
+        .split(",")
+        .map((c) => c.trim().toLowerCase())
+        .filter((c) => c.length > 0);
+      if (countryTerms.length > 0) {
+        allUsers = allUsers.filter((user) => {
+          const userCountries = (user.visitedCountries || []).map((c) =>
+            c.toLowerCase()
+          );
+          return countryTerms.some((term) =>
+            userCountries.some((country) => country.includes(term))
+          );
+        });
+      }
+    }
+
+    // Filter by travelInterests (case-insensitive partial match)
+    if (travelInterests && travelInterests.trim().length > 0) {
+      const interestTerms = travelInterests
+        .split(",")
+        .map((i) => i.trim().toLowerCase())
+        .filter((i) => i.length > 0);
+      if (interestTerms.length > 0) {
+        allUsers = allUsers.filter((user) => {
+          const userInterests = (user.travelInterests || []).map((i) =>
+            i.toLowerCase()
+          );
+          return interestTerms.some((term) =>
+            userInterests.some((interest) => interest.includes(term))
+          );
+        });
+      }
+    }
+
+    // Apply pagination after filtering
+    const total = allUsers.length;
+    const paginatedUsers = allUsers.slice(skip, skip + limitNum);
 
     return res.json(
       ok({
@@ -357,7 +395,7 @@ export const searchUsers = async (
           limit: limitNum,
           totalPages: Math.ceil(total / limitNum)
         },
-        data: users
+        data: paginatedUsers
       })
     );
   } catch (err) {
