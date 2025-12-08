@@ -23,7 +23,12 @@ router.get("/me", authGuard(), getMe);
 router.get("/all", getAllUsers);
 
 // public: search users by any field
-// GET /api/users/search?query=&page=&limit=
+// GET /api/users/search?query=&visitedCountries=&travelInterests=&page=&limit=
+// Examples:
+//   ?query=john
+//   ?visitedCountries=France,Italy
+//   ?travelInterests=Adventure,Beach
+//   ?query=john&visitedCountries=France&travelInterests=Adventure
 router.get("/search", searchUsers);
 
 // admin: list + search + filter + pagination

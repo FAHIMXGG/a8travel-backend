@@ -253,6 +253,12 @@ export const updateUserAdmin = async (
 };
 
 // GET /api/users/search (public) – search users by any field
+// Supports: query (general search), visitedCountries, travelInterests
+// Examples:
+//   /api/users/search?query=john
+//   /api/users/search?visitedCountries=France,Italy
+//   /api/users/search?travelInterests=Adventure,Beach
+//   /api/users/search?query=john&visitedCountries=France&travelInterests=Adventure
 export const searchUsers = async (
   req: Request,
   res: Response,
@@ -262,11 +268,15 @@ export const searchUsers = async (
     const {
       page = "1",
       limit = "10",
-      query
+      query,
+      visitedCountries,
+      travelInterests
     } = req.query as {
       page?: string;
       limit?: string;
       query?: string;
+      visitedCountries?: string;
+      travelInterests?: string;
     };
 
     const pageNum = Math.max(parseInt(page || "1", 10), 1);
@@ -277,10 +287,12 @@ export const searchUsers = async (
       isBlocked: false // Only show non-blocked users in public search
     };
 
-    // Search across multiple user fields
+    const conditions: any[] = [];
+
+    // General query search across multiple fields
     if (query && query.trim().length > 0) {
       const searchTerm = query.trim();
-      where.OR = [
+      conditions.push(
         { name: { contains: searchTerm, mode: "insensitive" } },
         { email: { contains: searchTerm, mode: "insensitive" } },
         { phone: { contains: searchTerm, mode: "insensitive" } },
@@ -288,7 +300,42 @@ export const searchUsers = async (
         { currentLocation: { contains: searchTerm, mode: "insensitive" } },
         { travelInterests: { has: searchTerm } },
         { visitedCountries: { has: searchTerm } }
-      ];
+      );
+    }
+
+    // Specific filter: visitedCountries (supports comma-separated values)
+    if (visitedCountries && visitedCountries.trim().length > 0) {
+      const countries = visitedCountries
+        .split(",")
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      if (countries.length > 0) {
+        if (countries.length === 1) {
+          where.visitedCountries = { has: countries[0] };
+        } else {
+          where.visitedCountries = { hasSome: countries };
+        }
+      }
+    }
+
+    // Specific filter: travelInterests (supports comma-separated values)
+    if (travelInterests && travelInterests.trim().length > 0) {
+      const interests = travelInterests
+        .split(",")
+        .map((i) => i.trim())
+        .filter((i) => i.length > 0);
+      if (interests.length > 0) {
+        if (interests.length === 1) {
+          where.travelInterests = { has: interests[0] };
+        } else {
+          where.travelInterests = { hasSome: interests };
+        }
+      }
+    }
+
+    // If we have general query conditions, add them as OR
+    if (conditions.length > 0) {
+      where.OR = conditions;
     }
 
     const [total, users] = await Promise.all([
