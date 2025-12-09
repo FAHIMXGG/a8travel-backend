@@ -1,3 +1,11 @@
+GitHub Server Repo: https://github.com/FAHIMXGG/a8travel-backend
+
+Server Live Deployment: https://a8travel-backend.vercel.app/health
+
+GitHub Client Repo: https://github.com/FAHIMXGG/A8travel-client
+
+Client Live Deployment: https://a8travel-client.vercel.app/
+
 # Travel Backend API
 
 A comprehensive RESTful API backend for a travel planning and social platform built with Node.js, Express, TypeScript, and MongoDB. This API enables users to create travel plans, connect with fellow travelers, manage subscriptions, and review travel experiences.
