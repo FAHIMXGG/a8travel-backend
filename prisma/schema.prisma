@@ -119,3 +119,22 @@ model TravelPlanReview {
   // one review per user per plan
   @@unique([planId, reviewerId], map: "plan_reviewer_unique")
 }
+
+model Coupon {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  code        String    @unique
+  description String?
+  discountType String   // "PERCENTAGE" or "FIXED"
+  discountValue Int     // e.g., 10 for 10% or 1000 for $10.00
+  minAmount   Int?      // Minimum purchase amount to use coupon
+  maxDiscount Int?      // Maximum discount amount (for percentage coupons)
+  expiresAt   DateTime  // Required expiry date
+  usageLimit  Int?      // Maximum number of times coupon can be used
+  usedCount   Int       @default(0) // How many times it's been used
+  isActive    Boolean   @default(true)
+  createdBy   String    @db.ObjectId // Admin user ID who created it
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isActive], map: "coupon_active_idx")
+}

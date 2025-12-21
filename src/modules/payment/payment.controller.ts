@@ -17,7 +17,7 @@ export const createCheckoutSession = async (
   try {
     if (!req.user) return res.status(401).json(fail("Unauthorized"));
 
-    const { amount, currency = "usd", subscriptionDays = 30 } = req.body;
+    const { amount, currency = "usd", subscriptionDays = 30, couponCode } = req.body;
 
     if (!amount || amount <= 0) {
       return res.status(400).json(fail("Invalid amount"));
@@ -25,6 +25,69 @@ export const createCheckoutSession = async (
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user) return res.status(404).json(fail("User not found"));
+
+    let finalAmount = amount;
+    let discountAmount = 0;
+    let couponId: string | null = null;
+    let appliedCoupon = null;
+
+    // Validate and apply coupon if provided
+    if (couponCode) {
+      // @ts-expect-error - Prisma client types are cached, but coupon model exists
+      const coupon = await prisma.coupon.findUnique({
+        where: { code: couponCode.toUpperCase() }
+      });
+
+      if (!coupon) {
+        return res.status(400).json(fail("Invalid coupon code"));
+      }
+
+      if (!coupon.isActive) {
+        return res.status(400).json(fail("Coupon is not active"));
+      }
+
+      // Check if coupon has expired (expiresAt is now always required)
+      if (new Date() > coupon.expiresAt) {
+        return res.status(400).json(fail("Coupon has expired"));
+      }
+
+      if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
+        return res.status(400).json(fail("Coupon usage limit exceeded"));
+      }
+
+      if (coupon.minAmount && amount < coupon.minAmount) {
+        return res.status(400).json(
+          fail(
+            `Minimum purchase amount of ${coupon.minAmount / 100}${
+              coupon.minAmount >= 1000 ? "" : " cents"
+            } required`
+          )
+        );
+      }
+
+      // Calculate discount
+      if (coupon.discountType === "PERCENTAGE") {
+        discountAmount = Math.floor((amount * coupon.discountValue) / 100);
+        if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
+          discountAmount = coupon.maxDiscount;
+        }
+      } else {
+        discountAmount = coupon.discountValue;
+      }
+
+      // Ensure discount doesn't exceed the amount
+      if (discountAmount > amount) {
+        discountAmount = amount;
+      }
+
+      finalAmount = amount - discountAmount;
+      couponId = coupon.id;
+      appliedCoupon = {
+        code: coupon.code,
+        discountAmount,
+        discountType: coupon.discountType
+      };
+    }
 
     // Ensure Stripe customer
     let customerId = user.stripeCustomerId;
@@ -53,10 +116,14 @@ export const createCheckoutSession = async (
           quantity: 1,
           price_data: {
             currency,
-            unit_amount: amount, // e.g. 999 = $9.99
+            unit_amount: finalAmount, // Use discounted amount
             product_data: {
               name: "Premium Subscription",
-              description: `Premium access for ${subscriptionDays} days`
+              description: `Premium access for ${subscriptionDays} days${
+                appliedCoupon
+                  ? ` (${appliedCoupon.discountType === "PERCENTAGE" ? appliedCoupon.code : `Coupon ${appliedCoupon.code} applied`})`
+                  : ""
+              }`
             }
           }
         }
@@ -65,16 +132,25 @@ export const createCheckoutSession = async (
       cancel_url: `${frontendBase}/payment-cancel`,
       metadata: {
         userId: user.id,
-        subscriptionDays: subscriptionDays.toString()
+        subscriptionDays: subscriptionDays.toString(),
+        originalAmount: amount.toString(),
+        finalAmount: finalAmount.toString(),
+        discountAmount: discountAmount.toString(),
+        couponId: couponId || "",
+        couponCode: couponCode?.toUpperCase() || ""
       }
     });
 
-    // This is what you’re expecting: session.url like "https://checkout.stripe.com/c/pay/..."
+    // This is what you're expecting: session.url like "https://checkout.stripe.com/c/pay/..."
     return res.json(
       ok(
         {
           checkoutUrl: session.url,
-          sessionId: session.id
+          sessionId: session.id,
+          originalAmount: amount,
+          finalAmount,
+          discountAmount: appliedCoupon ? discountAmount : 0,
+          coupon: appliedCoupon
         },
         "Checkout session created"
       )
@@ -111,6 +187,19 @@ export const confirmSubscription = async (
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user) return res.status(404).json(fail("User not found"));
+
+    // Increment coupon usage count if coupon was used
+    if (session.metadata?.couponId) {
+      // @ts-expect-error - Prisma client types are cached, but coupon model exists
+      await prisma.coupon.update({
+        where: { id: session.metadata.couponId },
+        data: {
+          usedCount: {
+            increment: 1
+          }
+        }
+      });
+    }
 
     const now = new Date();
     const newExpire =

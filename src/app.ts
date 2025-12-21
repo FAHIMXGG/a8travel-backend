@@ -7,6 +7,7 @@ import { env } from "./config/env";
 import authRoutes from "./modules/auth/auth.routes";
 import userRoutes from "./modules/user/user.routes";
 import paymentRoutes from "./modules/payment/payment.routes";
+import couponRoutes from "./modules/coupon/coupon.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import travelPlanRoutes from "./modules/travelPlan/travelPlan.routes";
 
@@ -28,6 +29,7 @@ app.use(cookieParser());
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/coupons", couponRoutes);
 app.use("/api/travel-plans", travelPlanRoutes);
 
 // Health check
