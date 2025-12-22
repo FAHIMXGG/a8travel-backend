@@ -453,6 +453,53 @@ export const getAllUsers = async (
   }
 };
 
+// GET /api/users/popular (public) – most popular travellers by rating
+// Sorted by:
+//   1) ratingAverage DESC
+//   2) ratingCount DESC
+//   3) createdAt ASC (older users first as tie‑breaker)
+// Query params:
+//   - limit (default 10)
+export const getPopularTravellers = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const {
+      limit = "10"
+    } = req.query as {
+      limit?: string;
+    };
+
+    const limitNum = Math.max(parseInt(limit || "10", 10), 1);
+
+    const users = await prisma.user.findMany({
+      where: {
+        isBlocked: false
+      },
+      orderBy: [
+        { ratingAverage: "desc" },
+        { ratingCount: "desc" },
+        { createdAt: "asc" }
+      ],
+      take: limitNum,
+      select: {
+        id: true,
+        name: true,
+        image: true,
+        ratingAverage: true,
+        ratingCount: true,
+        currentLocation: true
+      }
+    });
+
+    return res.json(ok(users));
+  } catch (err) {
+    next(err);
+  }
+};
+
 // NEW: GET /api/users/me/travel-history  (joined trips, ended, pagination)
 export const getMyTravelHistory = async (
   req: Request,

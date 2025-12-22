@@ -8,7 +8,8 @@ import {
   updatePassword,
   updateUserAdmin,
   searchUsers,
-  getAllUsers
+  getAllUsers,
+  getPopularTravellers
 } from "./user.controller";
 import { authGuard } from "../../middlewares/authMiddleware";
 import { Role } from "@prisma/client";
@@ -21,6 +22,10 @@ router.get("/me", authGuard(), getMe);
 // public: get all users with pagination
 // GET /api/users/all?page=&limit=
 router.get("/all", getAllUsers);
+
+// public: get most popular travellers by rating
+// GET /api/users/popular?limit=
+router.get("/popular", getPopularTravellers);
 
 // public: search users by any field
 // GET /api/users/search?query=&visitedCountries=&travelInterests=&page=&limit=
